@@ -41,7 +41,7 @@
     
     <!-- A-Frame and AR.js Libraries -->
     <script src="https://aframe.io/releases/1.4.2/aframe.min.js"></script>
-    <!-- We use the NFT version for flexibility, though we rely on a single pattern here -->
+    <!-- AR.js A-Frame components -->
     <script src="https://cdn.jsdelivr.net/gh/AR-js-org/AR.js@3.4.7/aframe/build/aframe-ar.min.js"></script>
 </head>
 <body class="bg-gray-50 overflow-hidden">
@@ -67,7 +67,7 @@
             <div class="mt-4 pt-2 border-t border-gray-200">
                 <p class="text-xs font-semibold text-gray-800 mb-1">Marker Instructions:</p>
                 <p class="text-xs text-red-600">
-                    <span class="font-bold">Required:</span> Print a black square with a white border (the 'Hiro' marker) or use a plain black card to place on a flat surface. The virtual board will appear on this marker.
+                    <span class="font-bold">Required:</span> Print or display the <a href="https://raw.githubusercontent.com/AR-js-org/AR.js/master/aframe/examples/marker-training/examples/hiro/hiro.png" target="_blank" class="underline">standard 'Hiro' marker</a>. The virtual board will appear on this marker.
                 </p>
             </div>
         </div>
@@ -81,10 +81,8 @@
             <!-- This marker represents the physical chessboard placeholder -->
             <a-marker id="chess-marker" preset='hiro'>
                 
-                <!-- Virtual Chessboard (8x8 plane) - helps with alignment -->
-                <a-plane id="board-base" rotation="-90 0 0" width="8" height="8" 
-                         material="shader: flat; src: https://placehold.co/512x512/333333/ffffff?text=CHESSBOARD+MARKER"
-                         position="0 0 -0.01"></a-plane>
+                <!-- Board Base Container: Squares will be added here via JavaScript -->
+                <a-entity id="board-base"></a-entity>
                 
                 <!-- Piece Container: All pieces will be added here via JavaScript -->
                 <a-entity id="piece-container"></a-entity>
@@ -98,58 +96,90 @@
     </div>
 
     <script>
+        // Log setup for better debugging
+        AFRAME.logLevel = 'warn'; 
+
         const sceneEl = document.querySelector('a-scene');
+        const boardBase = document.getElementById('board-base');
         const pieceContainer = document.getElementById('piece-container');
         const fenInput = document.getElementById('fenInput');
         const visualizeBtn = document.getElementById('visualizeBtn');
-        const boardBase = document.getElementById('board-base');
 
-        // FEN mapping logic
+        // FEN piece visual definitions (slightly taller and metallic for better AR contrast)
         const FEN_PIECES = {
-            'p': { type: 'Pawn', color: '#B91C1C', model: 'cylinder', radius: 0.3, height: 1.0 }, // Dark Red
-            'P': { type: 'Pawn', color: '#FEF08A', model: 'cylinder', radius: 0.3, height: 1.0 }, // Light Yellow
-            'r': { type: 'Rook', color: '#B91C1C', model: 'box', width: 0.6, height: 1.2, depth: 0.6 },
-            'R': { type: 'Rook', color: '#FEF08A', model: 'box', width: 0.6, height: 1.2, depth: 0.6 },
-            'n': { type: 'Knight', color: '#B91C1C', model: 'octahedron', radius: 0.7, detail: 1 },
-            'N': { type: 'Knight', color: '#FEF08A', model: 'octahedron', radius: 0.7, detail: 1 },
-            'b': { type: 'Bishop', color: '#B91C1C', model: 'cone', radius: 0.4, height: 1.5 },
-            'B': { type: 'Bishop', color: '#FEF08A', model: 'cone', radius: 0.4, height: 1.5 },
-            'q': { type: 'Queen', color: '#B91C1C', model: 'sphere', radius: 0.6 },
-            'Q': { type: 'Queen', color: '#FEF08A', model: 'sphere', radius: 0.6 },
-            'k': { type: 'King', color: '#B91C1C', model: 'box', width: 0.8, height: 2.0, depth: 0.8 },
-            'K': { type: 'King', color: '#FEF08A', model: 'box', width: 0.8, height: 2.0, depth: 0.8 },
+            'p': { type: 'Pawn', color: '#B91C1C', model: 'cylinder', radius: 0.3, height: 1.2 }, // Dark Red (Black pieces)
+            'P': { type: 'Pawn', color: '#FCD34D', model: 'cylinder', radius: 0.3, height: 1.2 }, // Amber (White pieces)
+            'r': { type: 'Rook', color: '#B91C1C', model: 'box', width: 0.6, height: 1.6, depth: 0.6 },
+            'R': { type: 'Rook', color: '#FCD34D', model: 'box', width: 0.6, height: 1.6, depth: 0.6 },
+            'n': { type: 'Knight', color: '#B91C1C', model: 'octahedron', radius: 0.7, height: 1.6 },
+            'N': { type: 'Knight', color: '#FCD34D', model: 'octahedron', radius: 0.7, height: 1.6 },
+            'b': { type: 'Bishop', color: '#B91C1C', model: 'cone', radius: 0.4, height: 2.0 },
+            'B': { type: 'Bishop', color: '#FCD34D', model: 'cone', radius: 0.4, height: 2.0 },
+            'q': { type: 'Queen', color: '#B91C1C', model: 'dodecahedron', radius: 0.7, height: 2.5 },
+            'Q': { type: 'Queen', color: '#FCD34D', model: 'dodecahedron', radius: 0.7, height: 2.5 },
+            'k': { type: 'King', color: '#B91C1C', model: 'box', width: 0.8, height: 2.8, depth: 0.8 },
+            'K': { type: 'King', color: '#FCD34D', model: 'box', width: 0.8, height: 2.8, depth: 0.8 },
         };
 
         /**
-         * Converts FEN piece notation to a 3D position relative to the marker center (0, 0, 0).
-         * Assumes 1 unit = 1 square side. Board runs from X, Z = -4 to 4.
-         * FEN ranks are 8 (j=0) down to 1 (j=7).
-         * FEN files are A (i=0) to H (i=7).
-         * @param {string} piece The piece character (P, k, r, etc.)
+         * Calculates the X Y Z position relative to the marker's center (0, 0, 0).
+         * @param {string} piece The piece character.
          * @param {number} fileIndex 0 (A) to 7 (H)
          * @param {number} rankIndex 0 (8) to 7 (1)
          * @returns {string} A-Frame position string "X Y Z"
          */
-        function getPosition(piece, fileIndex, rankIndex) {
-            // Calculate X (File): Center of the square
-            // (i + 0.5) - 4 = i - 3.5
+        function getPiecePosition(piece, fileIndex, rankIndex) {
+            // X (File): A=0 -> -3.5, H=7 -> 3.5
             const x = (fileIndex - 3.5); 
             
-            // Calculate Z (Rank): Center of the square. FEN rank 0 (8) -> positive Z; rank 7 (1) -> negative Z
-            // (7 - j + 0.5) - 4 = 3.5 - j - 0.5 = 3 - j. Let's use 3.5 - j for the center.
-            const z = - (rankIndex - 3.5);
+            // Z (Rank): 8 (rankIndex=0) -> 3.5 (Far), 1 (rankIndex=7) -> -3.5 (Near)
+            const z = - (rankIndex - 3.5); 
 
-            // Calculate Y (Height): Half the piece height for correct base placement
+            // Y (Height): Half the piece height to place the base on the plane (Y=0)
             const pieceData = FEN_PIECES[piece];
-            const y = pieceData.height ? (pieceData.height / 2) : 0.6; // Default height for sphere/octahedron
-
-            // Add a small offset (0.01) to ensure the piece sits slightly above the plane (Z is up in A-Frame)
-            return `${x.toFixed(2)} ${y.toFixed(2)} ${z.toFixed(2)}`;
+            const y = pieceData.height ? (pieceData.height / 2) : 0.6; 
+            
+            return `${x.toFixed(3)} ${y.toFixed(3)} ${z.toFixed(3)}`;
         }
+        
+        /**
+         * Generates the 8x8 colored chessboard grid.
+         */
+        function generateGrid() {
+            // Clear existing squares
+            while (boardBase.firstChild) {
+                boardBase.removeChild(boardBase.firstChild);
+            }
+            
+            // Create 64 squares (1 unit wide each)
+            for(let i = 0; i < 8; i++) { // Files (X)
+                for(let j = 0; j < 8; j++) { // Ranks (Z)
+                    const square = document.createElement('a-plane');
+                    const isDark = (i + j) % 2 === 0;
+                    
+                    square.setAttribute('width', 1.0);
+                    square.setAttribute('height', 1.0);
+                    square.setAttribute('color', isDark ? '#4F46E5' : '#F9A8D4'); // Indigo and Pink for contrast
+                    
+                    // X position: Center of square at i: (i - 3.5)
+                    // Z position: Center of square at j: -(j - 3.5)
+                    const x = i - 3.5;
+                    const z = -(j - 3.5);
+                    
+                    // Y position: Slightly above the marker plane (Y=0)
+                    square.setAttribute('position', `${x.toFixed(3)} 0.001 ${z.toFixed(3)}`);
+                    square.setAttribute('rotation', '-90 0 0'); // Lay flat on the XZ plane
+
+                    boardBase.appendChild(square);
+                }
+            }
+            console.log("Chess grid generated.");
+        }
+
 
         /**
          * Parses the FEN string and generates A-Frame entities for the pieces.
-         * @param {string} fen The FEN string (e.g., 'rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR')
+         * @param {string} fen The FEN string
          */
         function visualizeFen(fen) {
             // Clear existing pieces
@@ -157,56 +187,64 @@
                 pieceContainer.removeChild(pieceContainer.firstChild);
             }
 
-            // Extract the board state part (before the space)
-            const boardPart = fen.split(' ')[0];
-            const ranks = boardPart.split('/');
+            try {
+                // Extract the board state part (before the space)
+                const boardPart = fen.split(' ')[0];
+                const ranks = boardPart.split('/');
 
-            ranks.forEach((rank, rankIndex) => {
-                let fileIndex = 0;
-                for (let i = 0; i < rank.length; i++) {
-                    const char = rank[i];
-                    
-                    if (/[1-8]/.test(char)) {
-                        // Skip empty squares
-                        fileIndex += parseInt(char, 10);
-                    } else if (FEN_PIECES[char]) {
-                        // Place a piece
-                        const pieceData = FEN_PIECES[char];
-                        const pieceEntity = document.createElement('a-entity');
+                let piecesCount = 0;
+
+                ranks.forEach((rank, rankIndex) => {
+                    let fileIndex = 0;
+                    for (let i = 0; i < rank.length; i++) {
+                        const char = rank[i];
                         
-                        // Create the geometry entity (Pawn=Cylinder, King/Rook=Box, etc.)
-                        const geometry = document.createElement(`a-${pieceData.model}`);
-                        
-                        // Set basic geometry attributes
-                        geometry.setAttribute('color', pieceData.color);
-                        geometry.setAttribute('material', 'shader: standard; metalness: 0.7; roughness: 0.3');
-                        
-                        // Set dimensions based on type
-                        if (pieceData.model === 'cylinder' || pieceData.model === 'cone') {
-                            geometry.setAttribute('radius', pieceData.radius);
-                            geometry.setAttribute('height', pieceData.height);
-                        } else if (pieceData.model === 'box') {
-                            geometry.setAttribute('width', pieceData.width);
-                            geometry.setAttribute('height', pieceData.height);
-                            geometry.setAttribute('depth', pieceData.depth);
-                        } else if (pieceData.model === 'sphere' || pieceData.model === 'octahedron') {
-                            geometry.setAttribute('radius', pieceData.radius);
+                        if (/[1-8]/.test(char)) {
+                            // Skip empty squares
+                            fileIndex += parseInt(char, 10);
+                        } else if (FEN_PIECES[char]) {
+                            // Place a piece
+                            const pieceData = FEN_PIECES[char];
+                            
+                            // 1. Create the piece's geometry entity
+                            const geometry = document.createElement(`a-${pieceData.model}`);
+                            
+                            geometry.setAttribute('color', pieceData.color);
+                            // Use a metallic material for a better visual pop in AR
+                            geometry.setAttribute('material', 'shader: standard; metalness: 0.8; roughness: 0.2;');
+                            
+                            // Set dimensions
+                            if (pieceData.model === 'cylinder' || pieceData.model === 'cone') {
+                                geometry.setAttribute('radius', pieceData.radius);
+                                geometry.setAttribute('height', pieceData.height);
+                            } else if (pieceData.model === 'box') {
+                                geometry.setAttribute('width', pieceData.width);
+                                geometry.setAttribute('height', pieceData.height);
+                                geometry.setAttribute('depth', pieceData.depth);
+                            } else { // sphere, octahedron, dodecahedron
+                                geometry.setAttribute('radius', pieceData.radius);
+                            }
+
+                            // 2. Position the piece relative to the marker
+                            const position = getPiecePosition(char, fileIndex, rankIndex);
+                            geometry.setAttribute('position', position);
+                            
+                            // 3. Add piece to the container
+                            pieceContainer.appendChild(geometry);
+                            
+                            fileIndex++;
+                            piecesCount++;
                         }
-
-                        // Position the piece
-                        const position = getPosition(char, fileIndex, rankIndex);
-                        geometry.setAttribute('position', position);
-                        
-                        // Add piece to the container
-                        pieceEntity.appendChild(geometry);
-                        pieceContainer.appendChild(pieceEntity);
-                        
-                        fileIndex++;
                     }
-                }
-            });
-            console.log(`Visualized FEN: ${fen}`);
+                });
+                console.log(`Successfully visualized FEN. Total pieces placed: ${piecesCount}`);
+
+            } catch (error) {
+                console.error("Error processing FEN or creating A-Frame entities:", error);
+            }
         }
+
+        // --- Initialization and Event Handling ---
 
         // Event listener for the button
         visualizeBtn.addEventListener('click', () => {
@@ -214,52 +252,15 @@
             if (fen) {
                 visualizeFen(fen);
             } else {
-                console.error("Please enter a valid FEN string.");
+                console.error("Please enter a FEN string.");
             }
         });
 
-        // Initialize visualization when the scene is loaded/ready
+        // Initialize the visualization once the A-Frame scene is loaded
         sceneEl.addEventListener('loaded', () => {
-            // Wait a moment for AR.js to initialize camera
-            setTimeout(() => {
-                visualizeFen(fenInput.value); // Load initial FEN
-            }, 500);
-        });
-
-        // Add a visual cue to the board base to represent the files/ranks
-        boardBase.addEventListener('loaded', () => {
-            // Add a simple grid to the base plane for better visualization
-            boardBase.setAttribute('material', {
-                shader: 'standard',
-                src: 'https://placehold.co/512x512/333333/ffffff?text=CHESSBOARD+MARKER', // Fallback texture
-                repeat: '8 8'
-            });
-            
-            // For a better look, let's create alternating planes (too complex for an MVP in a single file, so sticking to a textured placeholder)
-            // The existing `src` on the plane is simple text, so let's add a visual white grid
-            for(let i = 0; i < 8; i++) {
-                for(let j = 0; j < 8; j++) {
-                    if ((i + j) % 2 === 0) {
-                        const square = document.createElement('a-plane');
-                        square.setAttribute('width', 1);
-                        square.setAttribute('height', 1);
-                        square.setAttribute('color', '#A855F7'); // Purple for dark squares
-                        square.setAttribute('position', `${(i - 3.5)} 0.001 ${-(j - 3.5)}`);
-                        square.setAttribute('rotation', '-90 0 0');
-                        boardBase.appendChild(square);
-                    } else {
-                        const square = document.createElement('a-plane');
-                        square.setAttribute('width', 1);
-                        square.setAttribute('height', 1);
-                        square.setAttribute('color', '#FACC15'); // Yellow for light squares
-                        square.setAttribute('position', `${(i - 3.5)} 0.001 ${-(j - 3.5)}`);
-                        square.setAttribute('rotation', '-90 0 0');
-                        boardBase.appendChild(square);
-                    }
-                }
-            }
-            // Remove the temporary texture placeholder
-            boardBase.removeAttribute('material');
+             console.log("A-Frame Scene and AR.js Loaded. Running initial setup.");
+             generateGrid(); // Draw the colored chessboard first
+             visualizeFen(fenInput.value); // Load initial FEN
         });
 
     </script>
