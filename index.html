@@ -39,32 +39,53 @@
         }
     </style>
     
-    <!-- A-Frame Library -->
-    <script src="https://aframe.io/releases/1.4.2/aframe.min.js"></script>
+    <!-- A-Frame Library 1.5.0 (STABLE FOR AR) -->
+    <!-- Added crossorigin to get better error reporting -->
+    <script src="https://aframe.io/releases/1.5.0/aframe.min.js" crossorigin="anonymous"></script>
+    
+    <!-- Error Handler Script -->
+    <script>
+        window.onerror = function(message, source, lineno, colno, error) {
+            console.error("Global Error Caught:", message);
+            const statusText = document.getElementById('status-text');
+            if (statusText) {
+                statusText.textContent = "系統錯誤: " + message;
+                statusText.classList.remove('text-blue-600', 'text-green-600');
+                statusText.classList.add('text-red-600');
+            }
+            return false;
+        };
+    </script>
 </head>
 <body class="bg-gray-50 overflow-hidden">
 
     <!-- UI Overlay for Instructions and Controls -->
     <div id="ui-overlay" class="p-4 flex flex-col items-center justify-start">
         <div class="control-panel bg-white/90 backdrop-blur-sm p-4 rounded-xl shadow-2xl w-full max-w-sm md:max-w-md">
-            <h1 class="text-xl font-bold text-gray-800 mb-2">AR Chess Visualization (WebXR Placement)</h1>
+            <h1 class="text-xl font-bold text-gray-800 mb-2">AR 象棋位置可視化 (WebXR 1.5.0)</h1>
             <p class="text-sm text-gray-600 mb-3">
-                1. Look for the **'Enter AR' button (cube icon) in the bottom right corner** of the view. 2. Point at a flat surface. 3. **Tap screen to place board.**
+                1. 點擊下方的「啟動 AR 模式」按鈕並允許相機權限。 2. 將裝置指向平面 (桌面/地面)。 3. **點擊螢幕放置棋盤。**
             </p>
             
-            <label for="fenInput" class="block text-xs font-medium text-gray-700">Current FEN Position:</label>
+            <label for="fenInput" class="block text-xs font-medium text-gray-700">當前 FEN 位置 (Current FEN Position):</label>
             <input type="text" id="fenInput" value="rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR w KQkq - 0 1" 
                    class="w-full mt-1 p-2 border border-gray-300 rounded-lg text-sm focus:ring-blue-500 focus:border-blue-500"
-                   placeholder="Enter FEN string">
+                   placeholder="輸入 FEN 字串">
+
+            <!-- CUSTOM AR START BUTTON -->
+            <button id="startArBtn" 
+                    class="mt-3 w-full py-3 bg-green-600 text-white font-semibold rounded-lg shadow-lg hover:bg-green-700 transition duration-150">
+                啟動 AR 模式 (Start AR Mode)
+            </button>
             
             <button id="visualizeBtn" 
                     class="mt-3 w-full py-2 bg-blue-600 text-white font-semibold rounded-lg shadow-lg hover:bg-blue-700 transition duration-150">
-                Visualize Position
+                可視化位置 (Visualize Position)
             </button>
 
             <div id="placement-status" class="mt-4 pt-2 border-t border-gray-200 text-center">
                 <p id="status-text" class="text-xs font-bold text-blue-600">
-                    STATUS: Look for the AR button to start.
+                    狀態：請點擊「啟動 AR 模式」按鈕。
                 </p>
             </div>
         </div>
@@ -73,16 +94,19 @@
     <!-- A-Frame AR Scene -->
     <div id="ar-scene-container">
         <!-- New A-Frame setup using WebXR for hit-testing -->
+        <!-- Added ar-hit-test component explicitly -->
         <a-scene 
-            webxr="requiredFeatures: hit-test, local-floor; optionalFeatures: anchor;" 
-            renderer="colorManagement: true;"
+            webxr="optionalFeatures: hit-test;"
+            ar-hit-test="target: #reticle; type: map;"
             hit-test-placement
-            ar-mode-ui="enabled: true">
+            renderer="colorManagement: true;"
+            ar-mode-ui="enabled: false"> <!-- Explicitly disable A-Frame's default UI button -->
             
             <!-- The reticle entity (shows where the surface is hit) -->
+            <!-- Note: ar-hit-test automatically controls visibility/position of this target -->
             <a-entity id="reticle" 
-                      geometry="primitive: ring; radiusOuter: 0.1; radiusInner: 0.08; segments: 32;" 
-                      material="color: #FF00FF; shader: flat; transparent: true; opacity: 0.5;" 
+                      geometry="primitive: ring; radiusOuter: 0.15; radiusInner: 0.1; segments: 32;" 
+                      material="color: #FF00FF; shader: flat; transparent: true; opacity: 0.8;" 
                       rotation="-90 0 0" 
                       visible="false"></a-entity>
             
@@ -93,72 +117,12 @@
             </a-entity>
             
             <!-- Camera (required for the AR scene) -->
-            <a-camera></a-camera>
+            <a-camera position="0 1.6 0"></a-camera>
 
         </a-scene>
     </div>
 
     <script>
-        AFRAME.logLevel = 'warn'; 
-
-        const sceneEl = document.querySelector('a-scene');
-        const boardBase = document.getElementById('board-base');
-        const pieceContainer = document.getElementById('piece-container');
-        const fenInput = document.getElementById('fenInput');
-        const visualizeBtn = document.getElementById('visualizeBtn');
-        const statusText = document.getElementById('status-text');
-
-        // --- AR Placement Component (WebXR Hit-Testing) ---
-        AFRAME.registerComponent('hit-test-placement', {
-            init: function () {
-                const reticle = document.getElementById('reticle');
-                const boardContainer = document.getElementById('board-container');
-                let isPlaced = false;
-
-                this.el.addEventListener('loaded', () => {
-                    generateGrid(); // Generate grid structure once on load
-
-                    this.el.addEventListener('ar-hit-test-results', (e) => {
-                        if (isPlaced) return;
-
-                        if (e.detail.results.length > 0) {
-                            const hit = e.detail.results[0];
-                            reticle.setAttribute('visible', true);
-                            
-                            // Update reticle position
-                            reticle.object3D.position.set(hit.position.x, hit.position.y, hit.position.z);
-                            statusText.textContent = "STATUS: Surface detected. Tap to place board.";
-
-                        } else {
-                            reticle.setAttribute('visible', false);
-                            statusText.textContent = "STATUS: Searching for flat surface...";
-                        }
-                    });
-
-                    // Handle placement on screen tap
-                    this.el.sceneEl.addEventListener('click', () => {
-                        if (reticle.getAttribute('visible') && !isPlaced) {
-                            isPlaced = true;
-                            reticle.setAttribute('visible', false);
-
-                            // Place the board exactly where the reticle is
-                            boardContainer.object3D.position.copy(reticle.object3D.position);
-                            boardContainer.setAttribute('visible', true);
-                            statusText.textContent = "STATUS: Board placed successfully! Adjust FEN now.";
-                            statusText.classList.remove('text-blue-600');
-                            statusText.classList.add('text-green-600');
-                            console.log('Board placed successfully!');
-                            
-                            // Run the visualization now that the board is placed
-                            visualizeFen(fenInput.value);
-                        }
-                    });
-                });
-            }
-        });
-        
-        // --- CHESS LOGIC (Remains the same) ---
-
         // FEN piece visual definitions (slightly taller and metallic for better AR contrast)
         const FEN_PIECES = {
             'p': { type: 'Pawn', color: '#B91C1C', model: 'cylinder', radius: 0.3, height: 1.2 }, // Dark Red (Black pieces)
@@ -174,100 +138,63 @@
             'k': { type: 'King', color: '#B91C1C', model: 'box', width: 0.8, height: 2.8, depth: 0.8 },
             'K': { type: 'King', color: '#FCD34D', model: 'box', width: 0.8, height: 2.8, depth: 0.8 },
         };
-
+        
         /**
          * Calculates the X Y Z position relative to the board's center (0, 0, 0).
-         * @param {string} piece The piece character.
-         * @param {number} fileIndex 0 (A) to 7 (H)
-         * @param {number} rankIndex 0 (8) to 7 (1)
-         * @returns {string} A-Frame position string "X Y Z"
          */
         function getPiecePosition(piece, fileIndex, rankIndex) {
-            // X (File): A=0 -> -3.5, H=7 -> 3.5
             const x = (fileIndex - 3.5); 
-            
-            // Z (Rank): 8 (rankIndex=0) -> 3.5 (Far), 1 (rankIndex=7) -> -3.5 (Near)
             const z = - (rankIndex - 3.5); 
-
-            // Y (Height): Half the piece height to place the base on the plane (Y=0)
             const pieceData = FEN_PIECES[piece];
             const y = pieceData.height ? (pieceData.height / 2) : 0.6; 
-            
             return `${x.toFixed(3)} ${y.toFixed(3)} ${z.toFixed(3)}`;
         }
-        
+
         /**
          * Generates the 8x8 colored chessboard grid.
          */
-        function generateGrid() {
-            // Clear existing squares
+        function generateGrid(boardBase) {
             while (boardBase.firstChild) {
                 boardBase.removeChild(boardBase.firstChild);
             }
-            
-            // Create 64 squares (1 unit wide each)
-            for(let i = 0; i < 8; i++) { // Files (X)
-                for(let j = 0; j < 8; j++) { // Ranks (Z)
+            for(let i = 0; i < 8; i++) { 
+                for(let j = 0; j < 8; j++) { 
                     const square = document.createElement('a-plane');
                     const isDark = (i + j) % 2 === 0;
-                    
                     square.setAttribute('width', 1.0);
                     square.setAttribute('height', 1.0);
-                    square.setAttribute('color', isDark ? '#4F46E5' : '#F9A8D4'); // Indigo and Pink for contrast
-                    
-                    // X position: Center of square at i: (i - 3.5)
-                    // Z position: Center of square at j: -(j - 3.5)
+                    square.setAttribute('color', isDark ? '#4F46E5' : '#F9A8D4'); 
                     const x = i - 3.5;
                     const z = -(j - 3.5);
-                    
-                    // Y position: Slightly above the placement plane (Y=0)
                     square.setAttribute('position', `${x.toFixed(3)} 0.001 ${z.toFixed(3)}`);
-                    square.setAttribute('rotation', '-90 0 0'); // Lay flat on the XZ plane
-
+                    square.setAttribute('rotation', '-90 0 0'); 
                     boardBase.appendChild(square);
                 }
             }
-            console.log("Chess grid generated (invisible until placed).");
+            console.log("Chess grid generated.");
         }
-
 
         /**
          * Parses the FEN string and generates A-Frame entities for the pieces.
-         * @param {string} fen The FEN string
          */
-        function visualizeFen(fen) {
-            // Clear existing pieces
+        function visualizeFen(pieceContainer, fen) {
             while (pieceContainer.firstChild) {
                 pieceContainer.removeChild(pieceContainer.firstChild);
             }
-
             try {
-                // Extract the board state part (before the space)
                 const boardPart = fen.split(' ')[0];
                 const ranks = boardPart.split('/');
-
-                let piecesCount = 0;
-
                 ranks.forEach((rank, rankIndex) => {
                     let fileIndex = 0;
                     for (let i = 0; i < rank.length; i++) {
                         const char = rank[i];
-                        
                         if (/[1-8]/.test(char)) {
-                            // Skip empty squares
                             fileIndex += parseInt(char, 10);
                         } else if (FEN_PIECES[char]) {
-                            // Place a piece
                             const pieceData = FEN_PIECES[char];
-                            
-                            // 1. Create the piece's geometry entity
                             const geometry = document.createElement(`a-${pieceData.model}`);
-                            
                             geometry.setAttribute('color', pieceData.color);
-                            // Use a metallic material for a better visual pop in AR
                             geometry.setAttribute('material', 'shader: standard; metalness: 0.8; roughness: 0.2;');
-                            
-                            // Set dimensions
                             if (pieceData.model === 'cylinder' || pieceData.model === 'cone') {
                                 geometry.setAttribute('radius', pieceData.radius);
                                 geometry.setAttribute('height', pieceData.height);
@@ -275,41 +202,146 @@
                                 geometry.setAttribute('width', pieceData.width);
                                 geometry.setAttribute('height', pieceData.height);
                                 geometry.setAttribute('depth', pieceData.depth);
-                            } else { // sphere, octahedron, dodecahedron
+                            } else { 
                                 geometry.setAttribute('radius', pieceData.radius);
                             }
-
-                            // 2. Position the piece relative to the board
                             const position = getPiecePosition(char, fileIndex, rankIndex);
                             geometry.setAttribute('position', position);
-                            
-                            // 3. Add piece to the container
-                            pieceContainer.appendChild(geometry);
-                            
+                            const pieceEntity = document.createElement('a-entity');
+                            pieceEntity.appendChild(geometry);
+                            pieceContainer.appendChild(pieceEntity);
                             fileIndex++;
-                            piecesCount++;
                         }
                     }
                 });
-                console.log(`Successfully visualized FEN. Total pieces placed: ${piecesCount}`);
-
             } catch (error) {
-                console.error("Error processing FEN or creating A-Frame entities:", error);
+                console.error("Error processing FEN:", error);
             }
         }
+        
+        // --- AR Placement Component (WebXR Hit-Testing) ---
+        AFRAME.registerComponent('hit-test-placement', {
+            schema: {
+                isPlaced: { type: 'boolean', default: false } 
+            },
+            
+            init: function () {
+                const component = this;
+                const sceneEl = component.el.sceneEl;
+                
+                // Use Standard A-Frame enter-vr event
+                sceneEl.addEventListener('enter-vr', function() {
+                    if (sceneEl.is('ar-mode')) {
+                        console.log("Entered AR Mode. Setting up listeners.");
+                        component.setupListeners();
+                        const statusText = document.getElementById('status-text');
+                        if (statusText) statusText.textContent = "狀態：AR 已啟動！請移動相機尋找平面。";
+                    }
+                });
+                
+                sceneEl.addEventListener('exit-vr', function() {
+                    component.resetState();
+                });
 
-        // --- Event Handling ---
+                // Standard AR-Hit-Test events from A-Frame 1.5.0 ar-hit-test component
+                // When the reticle position changes or surface is found
+                // NOTE: ar-hit-test handles reticle visibility automatically
+                
+                // We just need to handle the select (tap) event
+                sceneEl.addEventListener('ar-hit-test-select', function() {
+                     component.placeBoard();
+                });
 
-        // Event listener for the button
-        visualizeBtn.addEventListener('click', () => {
-            const fen = fenInput.value.trim();
-            if (fen) {
-                visualizeFen(fen);
-            } else {
-                console.error("Please enter a FEN string.");
+                const boardBase = document.getElementById('board-base');
+                if (boardBase) generateGrid(boardBase);
+            },
+
+            resetState: function() {
+                this.data.isPlaced = false;
+                const boardContainer = document.getElementById('board-container');
+                const startArBtn = document.getElementById('startArBtn');
+                
+                if (boardContainer) boardContainer.setAttribute('visible', false);
+
+                const statusText = document.getElementById('status-text');
+                if (statusText) {
+                    statusText.textContent = "狀態：AR 模式已結束。請重新啟動。";
+                    statusText.classList.remove('text-green-600', 'text-red-600');
+                    statusText.classList.add('text-blue-600');
+                }
+                if (startArBtn) startArBtn.style.display = 'block';
+            },
+
+            placeBoard: function() {
+                if (this.data.isPlaced) return;
+
+                const reticle = document.getElementById('reticle');
+                const boardContainer = document.getElementById('board-container');
+                const statusText = document.getElementById('status-text');
+                const fenInput = document.getElementById('fenInput');
+                const pieceContainer = document.getElementById('piece-container');
+
+                if (reticle && reticle.getAttribute('visible')) {
+                    this.data.isPlaced = true;
+                    
+                    // Copy position/rotation from reticle to board
+                    boardContainer.object3D.position.copy(reticle.object3D.position);
+                    boardContainer.object3D.rotation.copy(reticle.object3D.rotation);
+                    boardContainer.setAttribute('visible', true);
+
+                    if (statusText) {
+                        statusText.textContent = "狀態：棋盤放置成功！";
+                        statusText.classList.remove('text-blue-600');
+                        statusText.classList.add('text-green-600');
+                    }
+                    console.log('Board placed successfully via ar-hit-test-select!');
+
+                    if (pieceContainer && fenInput) {
+                        visualizeFen(pieceContainer, fenInput.value);
+                    }
+                }
+            },
+
+            setupListeners: function() {
+                // In A-Frame 1.5.0 with ar-hit-test component, 
+                // much of the manual raycasting logic is handled by the system.
+                // We just listen for 'ar-hit-test-select' defined in init.
             }
         });
+        
+        // --- Main Execution Block ---
+        window.onload = function() {
+            const sceneEl = document.querySelector('a-scene');
+            const pieceContainer = document.getElementById('piece-container');
+            const fenInput = document.getElementById('fenInput');
+            const visualizeBtn = document.getElementById('visualizeBtn');
+            const statusText = document.getElementById('status-text');
+            const startArBtn = document.getElementById('startArBtn'); 
 
+            startArBtn.addEventListener('click', () => {
+                if (sceneEl.is('ar-mode')) return;
+                
+                // Request Session directly using A-Frame API
+                sceneEl.enterAR();
+            });
+
+            visualizeBtn.addEventListener('click', () => {
+                const fen = fenInput.value.trim();
+                const placementComponent = sceneEl.components['hit-test-placement'];
+
+                if (placementComponent && placementComponent.data.isPlaced) {
+                    if (fen) {
+                        visualizeFen(pieceContainer, fen);
+                    } else {
+                        console.error("Please enter a FEN string.");
+                    }
+                } else if (!sceneEl.is('ar-mode')) {
+                    statusText.textContent = "狀態：請先啟動 AR 模式。";
+                } else {
+                    statusText.textContent = "狀態：請先點擊螢幕放置棋盤。";
+                }
+            });
+        };
     </script>
 </body>
 </html>
